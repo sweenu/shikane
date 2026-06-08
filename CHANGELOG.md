@@ -8,6 +8,10 @@ regarding documented command line interfaces and configuration files.
 
 ## [Unreleased]
 
+### Fixed
+
+- settings: Read existing config files without requiring write permissions
+
 ## [1.1.0] - 2026-05-31
 
 ### Changed

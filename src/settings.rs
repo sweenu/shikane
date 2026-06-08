@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::io::Read;
+use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -73,14 +73,8 @@ fn parse_settings_toml(
         }
         Some(path) => path,
     };
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .read(true)
-        .open(config_path.clone())
-        .context(ReadConfigFileCtx)?;
-    let mut s = String::new();
-    file.read_to_string(&mut s).context(ReadConfigFileCtx)?;
+    ensure_config_file_exists(&config_path).context(ReadConfigFileCtx)?;
+    let s = std::fs::read_to_string(&config_path).context(ReadConfigFileCtx)?;
     let mut config: SettingsToml = toml::from_str(&s).context(TomlDeserializeCtx)?;
     config
         .profiles
@@ -88,6 +82,18 @@ fn parse_settings_toml(
         .enumerate()
         .for_each(|(idx, p)| p.index = idx);
     Ok((config, config_path))
+}
+
+fn ensure_config_file_exists(config_path: &PathBuf) -> Result<(), std::io::Error> {
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(config_path)
+    {
+        Ok(_) => Ok(()),
+        Err(err) if err.kind() == ErrorKind::AlreadyExists => Ok(()),
+        Err(err) => Err(err),
+    }
 }
 
 #[derive(Debug, Snafu)]
@@ -113,4 +119,47 @@ pub enum SettingsError {
         source: toml::de::Error,
         location: Location,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
+
+    use super::parse_settings_toml;
+
+    fn test_config_path(name: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "shikane-{name}-{}-{}.toml",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = fs::remove_file(&path);
+        path
+    }
+
+    #[test]
+    fn reads_read_only_config() {
+        let path = test_config_path("readonly");
+        fs::write(&path, "").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
+
+        let result = parse_settings_toml(Some(path.clone()));
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        fs::remove_file(&path).unwrap();
+        result.unwrap();
+    }
+
+    #[test]
+    fn creates_missing_config() {
+        let path = test_config_path("missing");
+
+        parse_settings_toml(Some(path.clone())).unwrap();
+
+        assert!(path.exists());
+        fs::remove_file(&path).unwrap();
+    }
 }
